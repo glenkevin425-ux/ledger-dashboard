@@ -1,0 +1,160 @@
+import { BreakdownItem, CashFlowPoint, Category, MonthlySummary, Transaction } from '../types';
+import { categoryColors } from '../data/mockData';
+
+export function getMonthKey(date: Date | string): string {
+  const value = typeof date === 'string' ? new Date(date) : date;
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
+}
+
+export function getCurrentMonthKey(): string {
+  return getMonthKey(new Date());
+}
+
+export function getMonthLabel(monthKey: string): string {
+  const [year, month] = monthKey.split('-').map(Number);
+  const date = new Date(year, month - 1, 1);
+  return new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(date);
+}
+
+export function getMonthOptions(): string[] {
+  const today = new Date();
+  const months: string[] = [];
+
+  for (let offset = 5; offset >= 0; offset -= 1) {
+    const month = new Date(today.getFullYear(), today.getMonth() - offset, 1);
+    months.push(getMonthKey(month));
+  }
+
+  return months;
+}
+
+export function getPreviousMonthKey(currentMonth: string): string {
+  const [year, month] = currentMonth.split('-').map(Number);
+  const current = new Date(year, month - 1, 1);
+  const previous = new Date(current.getFullYear(), current.getMonth() - 1, 1);
+  return getMonthKey(previous);
+}
+
+export function formatCurrency(value: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0
+  }).format(value);
+}
+
+export function monthList(values: string[]): string[] {
+  return values;
+}
+
+export function isSameCategory(value: string, category: Category) {
+  return value === category;
+}
+
+export function getMonthlySummary(transactions: Transaction[], monthKey: string): MonthlySummary {
+  const monthTransactions = transactions.filter((transaction) => getMonthKey(transaction.date) === monthKey);
+
+  const income = monthTransactions
+    .filter((transaction) => transaction.type === 'Income')
+    .reduce((sum, transaction) => sum + transaction.amount, 0);
+
+  const expense = monthTransactions
+    .filter((transaction) => transaction.type === 'Expense')
+    .reduce((sum, transaction) => sum + transaction.amount, 0);
+
+  const net = income - expense;
+  const savingsRate = income > 0 ? (net / income) * 100 : 0;
+
+  return { income, expense, net, savingsRate };
+}
+
+export function getSpendingBreakdown(transactions: Transaction[], monthKey: string): BreakdownItem[] {
+  const monthExpenses = transactions.filter(
+    (transaction) => transaction.type === 'Expense' && getMonthKey(transaction.date) === monthKey
+  );
+
+  const total = monthExpenses.reduce((sum, transaction) => sum + transaction.amount, 0) || 1;
+
+  const grouped = monthExpenses.reduce<Record<string, number>>((acc, transaction) => {
+    acc[transaction.category] = (acc[transaction.category] || 0) + transaction.amount;
+    return acc;
+  }, {});
+
+  return Object.entries(grouped)
+    .map(([category, amount]) => ({
+      category: category as Category,
+      amount,
+      percentage: (amount / total) * 100,
+      color: categoryColors[category as Category]
+    }))
+    .sort((a, b) => b.amount - a.amount);
+}
+
+export function getCashFlowSeries(transactions: Transaction[], months: string[]): CashFlowPoint[] {
+  return months.map((month) => {
+    const summary = getMonthlySummary(transactions, month);
+    return {
+      month,
+      income: summary.income,
+      expense: summary.expense,
+      net: summary.net
+    };
+  });
+}
+
+export function getInsights(transactions: Transaction[], monthKey: string, goals: Array<{ name: string; target: number; currentAmount: number }>) {
+  const currentSummary = getMonthlySummary(transactions, monthKey);
+  const previousSummary = getMonthlySummary(transactions, getPreviousMonthKey(monthKey));
+
+  const expenseBreakdown = getSpendingBreakdown(transactions, monthKey);
+  const topCategory = expenseBreakdown[0];
+
+  const transportExpense = transactions
+    .filter((transaction) => transaction.category === 'Transport' && getMonthKey(transaction.date) === monthKey)
+    .reduce((sum, transaction) => sum + transaction.amount, 0);
+
+  const previousTransport = transactions
+    .filter((transaction) => transaction.category === 'Transport' && getMonthKey(transaction.date) === getPreviousMonthKey(monthKey))
+    .reduce((sum, transaction) => sum + transaction.amount, 0);
+
+  const transportDelta = previousTransport > 0 ? ((transportExpense - previousTransport) / previousTransport) * 100 : 0;
+
+  const emergencyGoal = goals.find((goal) => goal.name === 'Emergency Fund');
+  const emergencyProgress = emergencyGoal ? (emergencyGoal.currentAmount / emergencyGoal.target) * 100 : 0;
+
+  const insights: string[] = [];
+
+  if (topCategory) {
+    insights.push(`Food is currently your largest spending category.`);
+  }
+
+  if (previousTransport > 0) {
+    const verb = transportDelta <= 0 ? 'less' : 'more';
+    insights.push(`You spent ${Math.abs(transportDelta).toFixed(0)}% ${verb} on transport than last month.`);
+  }
+
+  if (emergencyGoal) {
+    insights.push(
+      emergencyProgress >= 70
+        ? 'You are on track to reach your emergency fund goal.'
+        : 'You are building toward your emergency fund goal.'
+    );
+  }
+
+  if (currentSummary.savingsRate >= 20) {
+    insights.push('Your savings rate is comfortably above your target this month.');
+  }
+
+  if (previousSummary.expense > 0) {
+    const expenseShift = ((currentSummary.expense - previousSummary.expense) / previousSummary.expense) * 100;
+    insights.push(
+      expenseShift <= 0
+        ? 'Your total spending is down from last month.'
+        : 'Your spending increased compared with last month.'
+    );
+  }
+
+  return insights;
+}
